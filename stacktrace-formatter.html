@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="corporate">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stacktrace — Java Stacktrace Formatter</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        .mono {
+            font-family: ui-monospace, 'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        /* Syntax colors — explicit per theme for proper contrast */
+        :root {
+            --syn-exception: #dc2626;
+            --syn-exception-bg: rgba(220, 38, 38, 0.07);
+            --syn-class: #1d4ed8;
+            --syn-method: #7c3aed;
+            --syn-file: #b45309;
+            --syn-line: #dc2626;
+            --syn-pkg: #6b7280;
+            --syn-dim: #9ca3af;
+            --syn-user-bg: rgba(16, 185, 129, 0.10);
+            --syn-user-border: #059669;
+        }
+
+        [data-theme="business"] {
+            --syn-exception: #f87171;
+            --syn-exception-bg: rgba(248, 113, 113, 0.10);
+            --syn-class: #93c5fd;
+            --syn-method: #c4b5fd;
+            --syn-file: #fcd34d;
+            --syn-line: #f87171;
+            --syn-pkg: #8b95a5;
+            --syn-dim: #5b6572;
+            --syn-user-bg: rgba(52, 211, 153, 0.12);
+            --syn-user-border: #34d399;
+        }
+
+        .exception-header {
+            color: var(--syn-exception);
+            font-weight: 600;
+            padding: 6px 12px;
+            background: var(--syn-exception-bg);
+            border-left: 3px solid var(--syn-exception);
+            border-radius: 0 4px 4px 0;
+            margin: 6px 0;
+        }
+
+        .stack-frame {
+            /* hanging indent: wrapped lines align under the frame text, 'at' never dangles */
+            padding: 2px 12px 2px calc(12px + 2.2em);
+            text-indent: -2.2em;
+        }
+
+        /* Override inherited pre-wrap so empty-state text doesn't pick up stray
+           whitespace/newlines from the source markup, which throws off centering */
+        .empty-state {
+            white-space: normal;
+        }
+
+        /* Splitter handle */
+        .splitter-handle { background: #d1d5db; }
+        .group:hover .splitter-handle { background: #9ca3af; }
+
+        [data-theme="business"] .splitter-handle { background: #4b5563; }
+        [data-theme="business"] .group:hover .splitter-handle { background: #6b7280; }
+
+        /* Split layout */
+        #inputPanel { width: 100%; }
+        @media (min-width: 1024px) {
+            #inputPanel { width: var(--split, 30%); transition: width 0.25s ease; }
+            #inputPanel.dragging { transition: none; }
+        }
+
+        .stack-frame.user-code {
+            background: var(--syn-user-bg);
+            border-left: 3px solid var(--syn-user-border);
+            border-radius: 0 4px 4px 0;
+            margin: 2px 0;
+        }
+
+        /* Dimmed framework frames: one uniform muted color, no rainbow */
+        .stack-frame.framework,
+        .stack-frame.framework span {
+            color: var(--syn-dim);
+            font-weight: 400;
+        }
+
+        .pkg-name { color: var(--syn-pkg); }
+        .class-name { color: var(--syn-class); font-weight: 600; }
+        .method-name { color: var(--syn-method); }
+        .file-info { color: var(--syn-file); }
+        .line-number { color: var(--syn-line); font-weight: 600; }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: oklch(var(--bc) / 0.2); border-radius: 3px; }
+    </style>
+</head>
+<body class="min-h-screen bg-base-200">
+
+    <!-- Navbar -->
+    <div class="navbar bg-base-100 border-b border-base-300 px-6">
+        <div class="flex-1 gap-3">
+            <!-- Logo mark -->
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect width="28" height="28" rx="6" class="fill-neutral"/>
+                <path d="M9 8L14 14L9 20" stroke="oklch(var(--b1))" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="15" y1="20" x2="20" y2="20" stroke="oklch(var(--b1))" stroke-width="2.2" stroke-linecap="round"/>
+            </svg>
+            <div>
+                <span class="text-base font-semibold tracking-tight">Stacktrace</span>
+                <span class="text-base font-light opacity-50">Analyzer</span>
+            </div>
+        </div>
+        <div class="flex-none">
+            <!-- Theme toggle -->
+            <label class="swap swap-rotate btn btn-ghost btn-circle btn-sm">
+                <input type="checkbox" id="themeToggle" />
+                <!-- sun -->
+                <svg class="swap-on w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                    <circle cx="12" cy="12" r="4"/>
+                    <path stroke-linecap="round" d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                </svg>
+                <!-- moon -->
+                <svg class="swap-off w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                </svg>
+            </label>
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto p-6 space-y-4">
+
+        <!-- Stats + Filters row -->
+        <div class="flex flex-col lg:flex-row gap-4">
+            <div class="stats bg-base-100 border border-base-300 shadow-sm">
+                <div class="stat py-3 px-6">
+                    <div class="stat-title text-xs">Lines</div>
+                    <div class="stat-value text-2xl" id="lineCount">0</div>
+                </div>
+                <div class="stat py-3 px-6">
+                    <div class="stat-title text-xs">Frames</div>
+                    <div class="stat-value text-2xl" id="frameCount">0</div>
+                </div>
+                <div class="stat py-3 px-6">
+                    <div class="stat-title text-xs">User Code</div>
+                    <div class="stat-value text-2xl text-success" id="userFrames">0</div>
+                </div>
+            </div>
+
+            <div class="card bg-base-100 border border-base-300 shadow-sm flex-1">
+                <div class="card-body py-3 px-5 flex-row flex-wrap items-center gap-3">
+                    <div class="form-control flex-1 min-w-52">
+                        <label class="label py-0.5"><span class="label-text text-xs opacity-60">Highlight packages</span></label>
+                        <input type="text" id="packageFilter" class="input input-bordered input-sm w-full mono"
+                            placeholder="com.myapp, org.myproject"
+                            value="com.myapp, org.myproject"
+                            oninput="updateHighlightFilters()" />
+                    </div>
+                    <div class="form-control flex-1 min-w-52">
+                        <label class="label py-0.5"><span class="label-text text-xs opacity-60">Highlight classes</span></label>
+                        <input type="text" id="classFilter" class="input input-bordered input-sm w-full mono"
+                            placeholder="UserService, OrderProcessor"
+                            oninput="updateHighlightFilters()" />
+                    </div>
+                    <button class="btn btn-ghost btn-sm self-end" onclick="resetToDefaults()">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panels -->
+        <div id="splitWrap" class="flex flex-col lg:flex-row gap-4 lg:gap-0 items-stretch">
+
+            <!-- Input (resizable) -->
+            <div id="inputPanel" class="card bg-base-100 border border-base-300 shadow-sm lg:shrink-0 min-w-0">
+                <div class="flex justify-between items-center px-5 py-3 border-b border-base-300">
+                    <h2 class="text-sm font-semibold">Raw Input</h2>
+                    <div class="flex gap-2">
+                        <button class="btn btn-ghost btn-xs" onclick="clearInput()">Clear</button>
+                        <button class="btn btn-neutral btn-xs" onclick="formatStacktrace()">Format</button>
+                    </div>
+                </div>
+                <div class="flex h-[520px] overflow-hidden rounded-b-2xl">
+                    <div id="lineGutter"
+                        class="mono text-right select-none bg-base-200 border-r border-base-300 opacity-50 overflow-hidden shrink-0 py-5 px-2"
+                        style="min-width: 3em;">1</div>
+                    <textarea id="inputStacktrace" wrap="off" spellcheck="false"
+                        class="textarea flex-1 h-full mono rounded-none border-0 focus:outline-none bg-base-100 resize-none p-5 whitespace-pre overflow-auto"
+                        placeholder="Paste your Java stacktrace here..."
+                        oninput="updateStats()"></textarea>
+                </div>
+            </div>
+
+            <!-- Splitter -->
+            <div id="splitter" class="hidden lg:flex items-center justify-center w-4 cursor-col-resize shrink-0 group" title="Drag to resize">
+                <div class="splitter-handle w-1 h-16 rounded-full transition-colors"></div>
+            </div>
+
+            <!-- Output (focus) -->
+            <div id="outputPanel" class="card bg-base-100 border border-base-300 shadow-sm flex-1 min-w-0">
+                <div class="flex justify-between items-center px-5 py-3 border-b border-base-300">
+                    <h2 class="text-sm font-semibold">Formatted Output</h2>
+                    <div class="flex gap-2">
+                        <button class="btn btn-ghost btn-xs" onclick="clearOutput()">Clear</button>
+                        <button class="btn btn-neutral btn-xs" id="copyBtn" onclick="copyToClipboard()">Copy</button>
+                    </div>
+                </div>
+                <div id="outputStacktrace" class="relative mono h-[520px] overflow-y-auto p-5 whitespace-pre-wrap break-words"><div class="empty-state absolute inset-0 flex items-center justify-center opacity-40 text-sm text-center px-8">Formatted output will appear here</div></div>
+            </div>
+        </div>
+
+        <footer class="text-center text-xs opacity-40 py-2">
+            All processing happens locally in your browser — nothing is sent anywhere.
+        </footer>
+    </div>
+
+    <script>
+        // ---------- Theme ----------
+        const themeToggle = document.getElementById('themeToggle');
+        const LIGHT = 'corporate', DARK = 'business';
+        const saved = localStorage.getItem('st-theme') || LIGHT;
+        document.documentElement.setAttribute('data-theme', saved);
+        themeToggle.checked = saved === DARK;
+
+        themeToggle.addEventListener('change', () => {
+            const theme = themeToggle.checked ? DARK : LIGHT;
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('st-theme', theme);
+        });
+
+        // ---------- Filters ----------
+        let userPackages = ['com.myapp', 'org.myproject'];
+        let userClasses = [];
+
+        // Normalize a filter token: trim, strip wildcards (com.myapp.* → com.myapp), trailing dots, lowercase
+        function normalizeToken(s) {
+            return s.trim().replace(/\.?\*+$/, '').replace(/\.+$/, '').toLowerCase();
+        }
+
+        function updateHighlightFilters() {
+            userPackages = document.getElementById('packageFilter').value
+                .split(',').map(normalizeToken).filter(Boolean);
+            userClasses = document.getElementById('classFilter').value
+                .split(',').map(normalizeToken).filter(Boolean);
+            if (document.getElementById('inputStacktrace').value.trim()) formatStacktrace();
+        }
+
+        function resetToDefaults() {
+            document.getElementById('packageFilter').value = 'com.myapp, org.myproject';
+            document.getElementById('classFilter').value = '';
+            updateHighlightFilters();
+        }
+
+        // ---------- Line numbers ----------
+        const inputEl = document.getElementById('inputStacktrace');
+        const gutterEl = document.getElementById('lineGutter');
+
+        function updateLineNumbers() {
+            const count = Math.max(inputEl.value.split('\n').length, 1);
+            gutterEl.innerHTML = Array.from({ length: count }, (_, i) => i + 1).join('<br>');
+            syncGutterScroll();
+        }
+
+        function syncGutterScroll() {
+            gutterEl.scrollTop = inputEl.scrollTop;
+        }
+
+        inputEl.addEventListener('scroll', syncGutterScroll);
+
+        // ---------- Stats ----------
+        let debounce;
+        function updateStats() {
+            const input = inputEl.value;
+            document.getElementById('lineCount').textContent =
+                input ? input.split('\n').filter(l => l.trim()).length : 0;
+            updateLineNumbers();
+            clearTimeout(debounce);
+            if (input.trim()) debounce = setTimeout(formatStacktrace, 150);
+        }
+
+        // ---------- Formatting ----------
+        function formatStacktrace() {
+            let input = document.getElementById('inputStacktrace').value.trim();
+            if (!input) { showEmptyState(); return; }
+
+            input = input.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+            const lines = input.split('\n');
+            let formatted = '', frameCount = 0, userFrames = 0;
+
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (!line) continue;
+
+                const frameMatch = matchFrame(line);
+
+                if (line.startsWith('Caused by:') || line.startsWith('Suppressed:')) {
+                    formatted += `<div class="exception-header mt-4">${escapeHtml(line)}</div>`;
+                } else if (frameMatch) {
+                    frameCount++;
+                    const isUser = isUserCodeFrame(line);
+                    if (isUser) userFrames++;
+                    formatted += `<div class="stack-frame ${isUser ? 'user-code' : 'framework'}">${renderFrame(line, frameMatch)}</div>`;
+                } else if (line.includes('Exception') || line.includes('Error')) {
+                    formatted += `<div class="exception-header">${escapeHtml(line)}</div>`;
+                } else {
+                    formatted += `<div class="px-3 opacity-60">${escapeHtml(line)}</div>`;
+                }
+            }
+
+            document.getElementById('outputStacktrace').innerHTML = formatted ||
+                '<div class="empty-state absolute inset-0 flex items-center justify-center opacity-40 text-sm text-center px-8">Unable to parse stacktrace</div>';
+            document.getElementById('frameCount').textContent = frameCount;
+            document.getElementById('userFrames').textContent = userFrames;
+
+            // Auto-expand output on first format (unless user resized manually)
+            if (formatted && !localStorage.getItem('st-split')) {
+                document.documentElement.style.setProperty('--split', '32%');
+            }
+        }
+
+        // Matches a stack frame with or without the 'at ' prefix:
+        //   at com.foo.Bar.baz(Bar.java:12)
+        //   com.foo.Bar.baz(Bar.java:12)
+        //   java.base/java.lang.Thread.run(Thread.java:833)
+        //   com.foo.Bar.lambda$baz$0(Unknown Source)
+        function matchFrame(line) {
+            return line.match(/^(?:at\s+)?((?:[\w$]+[.\/])+[\w$]+)\.([\w$<>]+)\(([^:)]*?)(?::(\d+))?\)/);
+        }
+
+        function renderFrame(line, match) {
+            const [, classPath, method, file, lineNum] = match;
+            const className = classPath.split(/[.\/]/).pop();
+            const packageName = classPath.substring(0, classPath.length - className.length);
+            const hasAt = /^at\s/.test(line);
+
+            let r = hasAt ? 'at&nbsp;' : '';
+            if (packageName) r += `<span class="pkg-name">${escapeHtml(packageName)}</span>`;
+            r += `<span class="class-name">${escapeHtml(className)}</span>`;
+            r += `.<span class="method-name">${escapeHtml(method)}</span>`;
+            r += `(<span class="file-info">${escapeHtml(file)}</span>`;
+            if (lineNum) r += `:<span class="line-number">${lineNum}</span>`;
+            return r + ')';
+        }
+
+        function isUserCodeFrame(line) {
+            const lower = line.toLowerCase();
+
+            // User-defined filters win first — they're explicit intent
+            for (const p of userPackages) if (p && lower.includes(p)) return true;
+            for (const c of userClasses) if (c && lower.includes(c)) return true;
+
+            return false;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ---------- Resizable split ----------
+        const splitWrap = document.getElementById('splitWrap');
+        const splitter = document.getElementById('splitter');
+        const inputPanel = document.getElementById('inputPanel');
+        const savedSplit = localStorage.getItem('st-split');
+        if (savedSplit) document.documentElement.style.setProperty('--split', savedSplit + '%');
+
+        let dragging = false;
+        splitter.addEventListener('pointerdown', (e) => {
+            dragging = true;
+            inputPanel.classList.add('dragging');
+            splitter.setPointerCapture(e.pointerId);
+            document.body.style.userSelect = 'none';
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            const rect = splitWrap.getBoundingClientRect();
+            let pct = ((e.clientX - rect.left) / rect.width) * 100;
+            pct = Math.min(70, Math.max(20, pct));
+            document.documentElement.style.setProperty('--split', pct + '%');
+            localStorage.setItem('st-split', pct.toFixed(1));
+        });
+
+        window.addEventListener('pointerup', () => {
+            if (!dragging) return;
+            dragging = false;
+            inputPanel.classList.remove('dragging');
+            document.body.style.userSelect = '';
+        });
+
+        // ---------- Actions ----------
+        function showEmptyState() {
+            document.getElementById('outputStacktrace').innerHTML =
+                '<div class="empty-state absolute inset-0 flex items-center justify-center opacity-40 text-sm text-center px-8">Formatted output will appear here</div>';
+            document.getElementById('frameCount').textContent = '0';
+            document.getElementById('userFrames').textContent = '0';
+        }
+
+        function clearInput() {
+            inputEl.value = '';
+            document.getElementById('lineCount').textContent = '0';
+            updateLineNumbers();
+            showEmptyState();
+        }
+
+        function clearOutput() { showEmptyState(); }
+
+        async function copyToClipboard() {
+            const output = document.getElementById('outputStacktrace');
+            try {
+                await navigator.clipboard.writeText(output.textContent || '');
+                const btn = document.getElementById('copyBtn');
+                btn.textContent = 'Copied';
+                btn.classList.replace('btn-neutral', 'btn-success');
+                setTimeout(() => {
+                    btn.textContent = 'Copy';
+                    btn.classList.replace('btn-success', 'btn-neutral');
+                }, 1500);
+            } catch (err) { console.error('Copy failed:', err); }
+        }
+    </script>
+</body>
+</html>
